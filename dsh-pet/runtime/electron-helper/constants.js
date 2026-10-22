@@ -158,9 +158,10 @@ const BALANCE_FADE_MS = 250;
 // /state 长轮询的挂起时长（与浏览器端同值）：宿主在"版本没变"时最多挂这么久。
 // 1s 是前端自己定的下限——空闲时请求率与改造前一致（1 req/s），叶子一变宿主立刻返回。
 const STATE_WAIT_MS = 1000;
-// 窗口四周外扩 = 该比例 × 宠物尺寸：为气泡 / 未来可能的弹窗预留显示空间；
-// 外扩区透明且点击穿透（只有身体命中区可交互）。单点可调——按实际观感改这里。
-const WINDOW_MARGIN_RATIO = 0.5;
+// 窗口余量（窗口 = 宠物包围盒 + 四周余量，为气泡/菜单/对话留显示空间）：口径统一在
+// shared 的 window.ts（宽档 0.5×size，收紧档 MIN_TIGHT_PAD_PX），本文件只决定**用哪一档**：
+// 主进程判定本会话没有整窗点击穿透能力（原生 Wayland）时经 query 传 tight=1 下来。
+const TIGHT_WINDOW = params.get('tight') === '1';
 
 // ---------- 全局状态 ----------
 const rootEl = document.getElementById('root');

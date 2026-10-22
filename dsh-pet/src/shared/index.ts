@@ -8,6 +8,7 @@
 //   - 新增「行为」请落在这里 + 两边的薄壳（浏览器 React 组件 / 桌面 DOM sprite）。
 export * from './types';
 export * from './constants';
+export * from './window'; // 桌面窗口余量（窗口 = 宠物包围盒 + 余量；收紧档见该文件头）
 export * from './pickers';
 export * from './displays'; // 多显示器几何（桌面 = 工作区矩形并集，而非它们的外接矩形）
 export * from './motion';

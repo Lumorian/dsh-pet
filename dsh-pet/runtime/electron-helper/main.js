@@ -2,7 +2,8 @@
  * dsh-pet desktop helper —— Electron 主进程
  *
  * 职责：为**每只桌面宠物**开一个独立的局部小窗口（透明、置顶、不可激活），
- * 窗口 = 宠物包围盒 + 四周外扩余量（renderer 的 WINDOW_MARGIN_RATIO，为气泡/弹窗预留空间），
+ * 窗口 = 宠物包围盒 + 四周余量（shared/window.ts 的 windowMargins，为气泡/弹窗预留空间；
+ * 原生 Wayland 等没有整窗穿透能力的环境走收紧档——见 TIGHT_WINDOW），
  * 宠物移动时 renderer 逐帧上报 bounds，本进程 setContentBounds 让窗口跟随宠物。
  *
  * 为什么是「局部小窗口」而不是「全屏透明画布」：全屏透明置顶窗会触发 Windows DWM 视频合成黑屏
@@ -66,6 +67,8 @@ const { shouldLinearize, resolveForcedScale, resolvePetScale } = require('./dpi-
 // 托盘的平台差异（模板图 / 左键是否自动弹菜单 / Dock）：规则住在模块里，main.js 只接线
 const { trayPlatform } = require('./tray-platform.js');
 const { buildDeskGeometry } = require('./desktop-geometry.js');
+// 窗口余量的纯计算（原生 Wayland 下没有点击穿透能力，必须把窗口收紧到宠物身上；见该文件头）
+const { MIN_TIGHT_PAD_PX, needsTightWindow, windowMargins } = require('./window-margin.js');
 
 // 允许无用户手势直接播放（余额动画等）
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -387,13 +390,42 @@ function petsFromEnv() {
   return [{ id: 'main', size: 462, index: 0 }];
 }
 
-/** 窗口初始尺寸 = 宠物包围盒 + 四周外扩余量（4×0.5×size，与 renderer 的 WINDOW_MARGIN_RATIO 一致；
+/**
+ * 本会话是否要把窗口收紧到宠物身上（见 window-margin.js）。
+ *
+ * 原生 Wayland 上没有点击穿透能力（Electron 43 的 setIgnoreMouseEvents 只有 X11 分支，
+ * screen.getCursorScreenPoint() 在 Wayland 下也不可用），此时 924×744 的透明余量区会把鼠标全吞掉。
+ * 收紧后窗口 ≈ 宠物本体，点哪里就是点哪里——这才是该环境唯一真正生效的「点击穿透」。
+ */
+const TIGHT_WINDOW = needsTightWindow();
+console.log(
+  '[dsh-pet-desktop-helper] tight-window=' +
+    TIGHT_WINDOW +
+    ' (platform=' +
+    process.platform +
+    ', session=' +
+    (process.env.XDG_SESSION_TYPE || '?') +
+    ', wayland=' +
+    (process.env.WAYLAND_DISPLAY || '-') +
+    ', minPad=' +
+    MIN_TIGHT_PAD_PX +
+    ')',
+);
+
+/** 窗口初始尺寸 = 宠物包围盒 + 四周余量（与 renderer 的 windowMargins 同一份口径；
  *  renderer 首帧 set-bounds 会按真实配置精确覆盖，这里只是避免启动瞬间的尺寸跳变）。 */
 function petWindowSize(size) {
   const height = (size * 9) / 16;
   const bottomPad = (size * (9 / 16) * (360 - 330)) / 360;
-  const m = Math.round(size * 0.5);
-  return { width: Math.round(size) + m * 2, height: Math.round(height + bottomPad) + m * 2 };
+  // 与 renderer 的 sprite.js 同一份口径（window-margin.js）：收紧环境下左右下各 MIN_TIGHT_PAD_PX，
+  // 上边距仍留半只宠物（气泡要地方）。这只是一次「首帧前」的初值，renderer 首次 set-bounds 会精确覆盖。
+  // 收紧档下没有"半只宠物"的余量可言（上边距留给气泡的高度由渲染端按实测气泡高度另算），
+  // 这里传 0 让上边距落成 MIN_TIGHT_PAD_PX——否则初值会按 0.5×size 撑成 231px 高。
+  const m = windowMargins(size, TIGHT_WINDOW ? 0 : size * 0.5, TIGHT_WINDOW, 'base');
+  return {
+    width: Math.round(size) + Math.round(m.l) + Math.round(m.r),
+    height: Math.round(height + bottomPad) + Math.round(m.t) + Math.round(m.b),
+  };
 }
 
 /**
@@ -539,6 +571,8 @@ function createPetWindows() {
           // 工具项「打开网站」的文案按宿主形态自动变（见 sprite.js）：desktop=唤起桌面应用 / site=打开站点
           openTarget: OPEN_TARGET,
           scale: String(scale),
+          // 收紧窗口（原生 Wayland）：renderer 按同一口径算余量，窗口与宠物身体严丝合缝
+          tight: TIGHT_WINDOW ? '1' : '0',
           petIndex: String(pet.index),
           workAreaW: String(area.width),
           workAreaH: String(area.height),

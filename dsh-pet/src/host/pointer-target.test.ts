@@ -349,3 +349,123 @@ describe('守卫：渲染端的输入租约必须在位（helper 随包发行，
     assert.ok(/'pet:input-busy'/.test(preload), 'IPC 频道名必须与 main.js 一致');
   });
 });
+
+describe('守卫：窗口余量口径（收紧档 = 原生 Wayland 的"点击穿透"替代方案）', () => {
+  const { MIN_TIGHT_PAD_PX: helperPad, needsTightWindow, windowMargins: helperMargins } = require(
+    helper + 'window-margin.js',
+  );
+  const sharedSrc = readSource('../shared/window.ts');
+
+  /** 从 shared/window.ts 源码里抠出常量（本文件不 import 源码，只做数值对照） */
+  const num = (name: string): number => {
+    const m = new RegExp(String.raw`export const ${name} = (\d*\.?\d+)`).exec(sharedSrc);
+    assert.ok(m, 'shared/window.ts 里找不到 ' + name);
+    return Number(m[1]);
+  };
+
+  test('收紧档内边距与 shared 同值', () => {
+    assert.equal(helperPad, num('MIN_TIGHT_PAD_PX'));
+    assert.equal(num('WINDOW_MARGIN_RATIO'), 0.5, '宽档比例是既有取值，不得改动（其它平台靠它留气泡空间）');
+  });
+
+  test('宽档：左右下 = 0.5×size，上边距至少装得下气泡（改造前逐位不变）', () => {
+    const m = helperMargins(462, 195, false, 'base');
+    assert.deepEqual(m, { t: 231, r: 231, b: 231, l: 231 });
+    // 气泡比半只宠物还高时（宠物小 + 字号固定）只加高上边距，其余三边不动
+    const tall = helperMargins(200, 260, false, 'base');
+    assert.deepEqual(tall, { t: 260, r: 100, b: 100, l: 100 });
+    // 宽档下三种情形结果相同：余量本来就够，不需要随气泡/菜单改变窗口
+    assert.deepEqual(helperMargins(462, 195, false, 'bubble'), helperMargins(462, 195, false, 'base'));
+    assert.deepEqual(helperMargins(462, 195, false, 'expand'), helperMargins(462, 195, false, 'base'));
+  });
+
+  test('收紧档：base 贴着宠物（窗口 486×284，而不是 924×744）', () => {
+    const m = helperMargins(462, 195, true, 'base');
+    assert.deepEqual(m, { t: 12, r: 12, b: 12, l: 12 });
+    // 窗口宽度从 3 倍宠物收到「宠物 + 24px」：这才是"点哪里就是点哪里"。
+    // 高度同样只剩 462×9/16 + bottomPad + 24 ≈ 284（宽档是 744）。
+    const wide = 462 + 231 * 2;
+    const tight = 462 + m.l + m.r;
+    assert.equal(tight, 486, '收紧后宽度 = 宠物宽 + 两侧 12px');
+    assert.ok(tight < wide * 0.55, '收紧后的宽度必须明显小于宽档：' + tight + ' vs ' + wide);
+  });
+
+  test('收紧档 + 气泡：只撑上边到气泡高度，左右下仍贴边（气泡悬在头顶）', () => {
+    const m = helperMargins(462, 195, true, 'bubble');
+    assert.deepEqual(m, { t: 195, r: 12, b: 12, l: 12 });
+    // 气泡比最小内边距还矮时不能把窗口压到 0（贴边会裁掉提示描边）
+    assert.deepEqual(helperMargins(462, 0, true, 'bubble'), { t: 12, r: 12, b: 12, l: 12 });
+  });
+
+  test('收紧档 + 菜单/对话/拖拽：整圈撑回宽档（面板是浮在侧边的，必须有空间不被裁）', () => {
+    assert.deepEqual(helperMargins(462, 195, true, 'expand'), helperMargins(462, 195, false, 'base'));
+  });
+
+  test('needsTightWindow：只把「明确的原生 Wayland」判为收紧，其余一律保持旧行为', () => {
+    const wl = { platform: 'linux', env: { WAYLAND_DISPLAY: 'wayland-1' } };
+    assert.equal(needsTightWindow(wl), true, '原生 Wayland 必须收紧（E43 的 setIgnoreMouseEvents 在那里是空操作）');
+    assert.equal(
+      needsTightWindow({ platform: 'linux', env: { WAYLAND_DISPLAY: 'wayland-1', XDG_SESSION_TYPE: 'x11' } }),
+      false,
+      '会话是 X11（Wayland 只是旁路）时保持旧行为——那里 setIgnoreMouseEvents 真的生效',
+    );
+    assert.equal(
+      needsTightWindow({ platform: 'linux', env: { DISPLAY: ':0', XDG_SESSION_TYPE: 'x11' } }),
+      false,
+      '纯 X11 不收紧',
+    );
+    assert.equal(needsTightWindow({ platform: 'linux', env: {} }), false, '无显示变量不收紧');
+    assert.equal(needsTightWindow({ platform: 'win32', env: { WAYLAND_DISPLAY: 'w' } }), false, 'Windows 有真穿透');
+    assert.equal(needsTightWindow({ platform: 'darwin', env: {} }), false, 'macOS 有真穿透');
+    assert.equal(
+      needsTightWindow({ platform: 'linux', env: { WAYLAND_DISPLAY: 'w', DSH_PET_TIGHT_WINDOW: '0' } }),
+      false,
+      'DSH_PET_TIGHT_WINDOW=0 必须能关掉（排障逃生口）',
+    );
+    assert.equal(
+      needsTightWindow({ platform: 'win32', env: { DSH_PET_TIGHT_WINDOW: '1' } }),
+      true,
+      'DSH_PET_TIGHT_WINDOW=1 在其它平台也能强制开（验证用）',
+    );
+  });
+
+  test('主进程：判定收紧 → 经 query 传给渲染端，初始窗口尺寸也按收紧档算', () => {
+    const main = readSource(helper + 'main.js');
+    assert.ok(/const TIGHT_WINDOW = needsTightWindow\(\);/.test(main), 'main.js 必须自己判定一次并缓存');
+    assert.ok(/tight: TIGHT_WINDOW \? '1' : '0'/.test(main), '收紧档必须经 loadFile 的 query 传给渲染端');
+    assert.ok(
+      /const m = windowMargins\(size, TIGHT_WINDOW \? 0 : size \* 0\.5, TIGHT_WINDOW, 'base'\)/.test(main),
+      '窗口初始尺寸必须按同一档位算（否则首帧会看到窗口从 924 缩到 486）',
+    );
+    const constants = readSource(helper + 'constants.js');
+    assert.ok(/const TIGHT_WINDOW = params\.get\('tight'\) === '1';/.test(constants), '渲染端必须从 query 读收紧标记');
+  });
+
+  test('渲染端：余量只在档位变化时重设窗口，且三条撑开路径都在位', () => {
+    const sprite = readSource(helper + 'sprite.js');
+    assert.ok(
+      /this\.margin = S\.windowMargins\(this\.size, this\.bubbleTopMargin, TIGHT_WINDOW, false\)/.test(sprite) ||
+        /S\.windowMargins\(this\.size, this\.bubbleTopMargin, TIGHT_WINDOW/.test(sprite),
+      '初始余量必须走 shared 的口径',
+    );
+    assert.ok(/updateMargin\(\) \{/.test(sprite), '必须有 updateMargin（档位重算的唯一出口）');
+    assert.ok(/if \(mode === this\._marginMode\) return;/.test(sprite), '档位没变必须直接返回（逐帧路径不能重设窗口）');
+    // 撑回宽档的四类来源：菜单/对话/可点余额气泡、拖拽、点击积分卡片
+    assert.ok(/marginMode\(\) \{/.test(sprite), '必须有 marginMode（哪一档余量的唯一判定处）');
+    assert.ok(
+      /if \(this\.menuOpen \|\| this\.chatOpen \|\| this\.balanceClickable\(\)\) return 'expand';/.test(sprite),
+      '菜单/对话/可点余额气泡必须撑回宽档（面板浮在侧边，窗口太小会被裁）',
+    );
+    assert.ok(
+      /document\.querySelector\('\.dsh-pet-score'\)\) return 'expand';/.test(sprite) ||
+        /querySelector\('\.dsh-pet-score'\)/.test(sprite),
+      '点击积分卡片是挂到 body 的固定定位浮层，同样需要整圈空间',
+    );
+    assert.ok(/this\.bubbleShown \? 'bubble' : 'base'/.test(sprite), '气泡显示时必须撑上边（否则气泡被窗口裁掉）');
+    // 占用状态变化的汇聚点必须跟着重算
+    assert.ok(
+      /syncInputBusy\(\) \{\s*(\/\/[^\n]*\n\s*)*this\.updateMargin\(\);/.test(sprite),
+      'syncInputBusy 必须调用 updateMargin',
+    );
+  });
+});

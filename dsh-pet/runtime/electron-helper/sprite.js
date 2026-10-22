@@ -47,9 +47,12 @@ class PetSprite {
     // （或关掉 followPet 把字号固定）时半只宠物的余量装不下气泡，气泡顶端会被窗口上边缘切掉。
     // 余量是透明且点击穿透的，加高没有副作用（与菜单贴边那类"屏幕裁切"问题是两回事）。
     // 注意：余量自此**不再四边相等**，主进程不能再按「窗口宽/4」反推命中区，故 setBounds 一并上报余量。
-    const m = this.size * WINDOW_MARGIN_RATIO;
+    // 余量分两档（口径在 shared/window.ts）：宽档（其它平台，0.5×size）与收紧档（原生 Wayland 没有
+    // 整窗穿透，窗口必须贴着宠物，否则余量区会吞掉鼠标）。收紧档下只在真需要时撑开：气泡撑上边，
+    // 菜单/对话撑整圈——见 updateMargin。
     const fontConf = pet.font || config.font || S.DEFAULT_FONT;
-    this.margin = { t: Math.max(m, S.bubbleTopMarginPx(fontConf, this.size)), r: m, b: m, l: m };
+    this.bubbleTopMargin = S.bubbleTopMarginPx(fontConf, this.size);
+    this.margin = S.windowMargins(this.size, this.bubbleTopMargin, TIGHT_WINDOW, 'base');
     window.__dshPetDebug.winMargin = this.margin;
     // 宠物包围盒左上角在【工作区】坐标系里的位置（本窗口的位置 = 宠物的位置）
     this.pos = { x: 0, y: 0 };
@@ -124,6 +127,11 @@ class PetSprite {
     // 余额气泡
     this.bubbleOn = false;
     this.bubbleTimer = null;
+    // 气泡此刻是否真有内容显示（renderBubble 的 slot !== 'none'）：收紧档据此临时撑开窗口上边，
+    // 否则气泡会画到窗口外被裁掉（见 updateMargin）
+    this.bubbleShown = false;
+    // 当前余量档位（'base' | 'bubble' | 'expand'）：只在档位变化时重设窗口，避免逐帧抖尺寸
+    this._marginMode = 'base';
     // 悬浮提示（替代原生 title 属性）：显隐 + 最近一次光标位置（**视口坐标**，见 renderTip）
     this.tipOn = false;
     this.tipCursor = null;
@@ -1210,6 +1218,8 @@ class PetSprite {
             S.clickScore(grabSpeed, this.size),
         );
         S.spawnScoreBurst(e.clientX, e.clientY);
+        // 积分卡片是挂到 body 的浮层（比宠物宽），收紧档要先撑开窗口；卡片自动消失后再收回来
+        setTimeout(() => this.updateMargin(), (S.SCORE_POPUP_DURATION_MS || 2200) + 120);
         S.mountScorePopup({
           x: e.clientX,
           y: e.clientY,
@@ -1427,6 +1437,9 @@ class PetSprite {
    * 本方法表达"我有没有在用输入"（优先级更高，覆写常规判定）。
    */
   syncInputBusy() {
+    // 占用状态变了 → 窗口余量档位也可能变（收紧档下菜单/对话/拖拽要把窗口撑回宽档），
+    // 这里是所有"占用"变化的汇聚点，跟着重算一次最省心（档位没变时是纯比较，不发 IPC）
+    this.updateMargin();
     this.syncInputRegions();
     const busy = this.inputBusy();
     if (busy === this._inputBusy) return;
@@ -1462,6 +1475,80 @@ class PetSprite {
     if (key === this._inputRegions) return;
     this._inputRegions = key;
     window.petBridge.setInputRegions(input);
+  }
+
+  /**
+   * 重算窗口余量（只在**档位变化**时重设窗口）。
+   *
+   * 收紧档（原生 Wayland，没有整窗点击穿透）下窗口必须贴着宠物本体，否则余量区会吞鼠标。
+   * 但气泡/菜单/对话确实是长在余量区里的窗口内 DOM，窗口太小它们会被裁掉——所以按需撑开：
+   *   base   = 四周 MIN_TIGHT_PAD_PX（宠物本体刚好装下）
+   *   bubble = 只撑上边到气泡高度（气泡悬在头顶）
+   *   expand = 整圈撑回宽档（菜单/对话是浮在侧边的面板，需要真正的空间；拖拽同理——
+   *            拖拽时宠物由弹簧追光标、滞后于指针，窗口给宽一点不容易把指针甩到窗口外）
+   *
+   * 宽档下三种情形算出来是同一份数，本函数自然退化成"什么都不做"。
+   */
+  /**
+   * 当前该用哪一档余量（收紧档专用；宽档三档同值，调不调都一样）。
+   *
+   *   expand —— 有**浮在宠物旁边**的窗口内 DOM：右键菜单、对话弹窗、点击积分卡片，
+   *             以及可点的余额气泡（三窗口读数是多列排版，宽度靠窗口兜底）。它们是真正的面板，
+   *             窗口只有宠物那么大就会被裁掉，必须整圈撑回宽档；拖拽也算——宠物由弹簧追光标、
+   *             滞后于指针，窗口宽一点不容易把指针甩到窗口外（那样 pointerup 就收不到了）。
+   *   bubble —— 只有头顶的气泡：只撑上边，左右下仍贴着宠物。
+   *   base   —— 什么都没有：窗口就是宠物本体，点哪里就是点哪里。
+   */
+  marginMode() {
+    if (this.menuOpen || this.chatOpen || this.balanceClickable()) return 'expand';
+    if (this.dragState && this.dragState.active) return 'expand';
+    if (document.querySelector('.dsh-pet-score')) return 'expand';
+    return this.bubbleShown ? 'bubble' : 'base';
+  }
+
+  /**
+   * 气泡实际探出 sprite 顶边多少像素（= 收紧档需要留的上边距）。
+   *
+   * 用**实测几何**而不是 bubbleTopMarginPx 的最坏情况：后者按「两行 + 配图」算，一句话的气泡
+   * 只有它的三分之一，按上限撑开会凭空多出一大片吞点击的窗口区域——正是这次要消掉的东西。
+   * 取 sprite 顶边与气泡顶边之差（两者都在同一坐标系里，差值与窗口位置无关），量不到（还没上屏）
+   * 就退回最坏情况，宁可多留也不能把气泡裁掉。
+   */
+  bubbleTopOverflow() {
+    const spriteRect = this.el.getBoundingClientRect();
+    const bubbleRect = this.bubble.getBoundingClientRect();
+    // 还没上屏（首帧前 / 气泡被隐藏）：两个矩形都是 0，量不出来 → 退回最坏情况，宁可多留
+    if (!(bubbleRect.height > 0) || !(spriteRect.height > 0)) return this.bubbleTopMargin;
+    // 探出量 = sprite 顶边 − 气泡顶边。**负数是对的**：矮气泡整个落在 sprite 顶线以下
+    // （底边比顶线低 0.108×size），此时 base 档的 12px 内边距已经够装，不该撑高窗口。
+    return Math.max(0, Math.ceil(spriteRect.top - bubbleRect.top));
+  }
+
+  updateMargin() {
+    if (!TIGHT_WINDOW) return; // 宽档：余量恒定，无需重算（省掉每帧比较）
+    const mode = this.marginMode();
+    if (mode === this._marginMode) return;
+    const prev = this.margin;
+    // 气泡档用**实测高度**而不是最坏情况上限：bubbleTopMarginPx 按两行 + 配图算，一句话的气泡
+    // 只有它的一半，按上限撑开会凭空多出一大片可点真区（正是这次要消掉的东西）。
+    // 气泡底边落在 sprite 顶边下方 SIZE*BUBBLE_OVERLAP_RATIO 处（见 index.html 的 .pet-bubble），
+    // 所以需要的上边距 = 气泡高度 − 这一段。
+    const need = mode === 'bubble' ? this.bubbleTopOverflow() : this.bubbleTopMargin;
+    const next = S.windowMargins(this.size, need, true, mode);
+    if (next.l === prev.l && next.t === prev.t && next.r === prev.r && next.b === prev.b) {
+      this._marginMode = mode;
+      return;
+    }
+    this._marginMode = mode;
+    this.margin = next;
+    window.__dshPetDebug.winMargin = next;
+    // sprite 钉在窗口内 (margin.l, margin.t)：窗口变了，sprite 自己的偏移也要跟着改，
+    // 然后重报一次 bounds（宠物包围盒位置不变，只是窗口把它重新包了一圈）
+    this.el.style.left = next.l + 'px';
+    this.el.style.top = next.t + 'px';
+    // 只重发窗口包围盒，**不**调 position()：position() 是按「配置角落 + 边距」重算位置，
+    // 宠物正漫游/被拖到屏幕中间时会把窗口（连同宠物）瞬移回角落。余量变化不该挪宠物。
+    this.sendBounds(this.pos.x, this.pos.y);
   }
 
   setInteractive(flag) {
@@ -1868,6 +1955,7 @@ class PetSprite {
     // 配图标记交给 CSS：带图时取消 min-width（样式在 shared 的 MEME_BUBBLE_CSS，两端同一份）。
     // 图片 URL 与视频同规则：传 BASE 前缀（桌面是 file:// 页面，必须绝对地址）
     // 素材根同理（配图的归属与动画一致：pet/<素材根>-memes/ 独占 → 用户目录 → 包内）
+    const balloonBefore = this.bubbleShown;
     const workOn = !!(this.workOn && this.workText);
     const whisperOn = !!(this.whisperOn && this.whisperView);
     const balanceOn = !!(this.bubbleOn && this.balanceView);
@@ -1894,6 +1982,8 @@ class PetSprite {
     this.bubble.classList.toggle('is-expanded', clickable && this.balanceExpanded);
     if (slot === 'none') {
       // 三者都没有可显示的内容：隐藏（不占位，也就不会挡住任何一层）
+      this.bubbleShown = false;
+      if (balloonBefore) this.updateMargin();
       this.bubble.classList.remove('is-on');
       window.__dshPetDebug.lastBubbleTitle = '';
       this.syncInputBusy(); // 气泡没了 → 撤销它的控件矩形与 busy 标记（否则整窗还留着可点区域）
@@ -1966,6 +2056,8 @@ class PetSprite {
       }
     }
     this.bubble.classList.add('is-on');
+    this.bubbleShown = true;
+    if (!balloonBefore) this.updateMargin(); // 气泡出现：收紧档需要先把窗口上边撑够（否则被裁）
     window.__dshPetDebug.lastBubbleTitle = this.bubble.textContent.slice(0, 60);
     // 气泡内容/尺寸变了 → 重报控件矩形（可点的余额气泡要靠它拿点击），并同步 busy 标记。
     // 这里是所有显隐/换内容的汇聚点，放在这里就不会漏掉任何一条路径。
