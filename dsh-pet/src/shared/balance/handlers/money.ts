@@ -35,8 +35,13 @@ function moneyRows(v: BalanceView): BalanceBubbleRow[] {
   const visible = (v.wallets ?? [])
     .filter((w) => Number(w.total) !== 0)
     .sort((a, b) => (a.currency === 'CNY' ? 0 : 1) - (b.currency === 'CNY' ? 0 : 1));
+  // 非 CNY / USD 的币种（如自建网关站点的其它展示币种）用「代码 + 空格 + 数字」，绝不一律套 ¥
   const amount =
-    visible.length > 0 ? visible.map((w) => (w.currency === 'USD' ? '$' : '¥') + w.total).join('/') : '¥0.00';
+    visible.length > 0
+      ? visible
+          .map((w) => (w.currency === 'USD' ? '$' : w.currency === 'CNY' ? '¥' : w.currency + ' ') + w.total)
+          .join('/')
+      : '¥0.00';
   if (!v.tier) return [{ role: 'label', text: '余额 ' + amount }];
   return [
     { role: 'label', text: '余额（' },

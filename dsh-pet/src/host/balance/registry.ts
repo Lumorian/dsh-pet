@@ -6,11 +6,23 @@
 import { commandCode } from './providers/commandcode';
 import { deepseekAccount } from './providers/deepseek-account';
 import { deepseekOfficial } from './providers/deepseek-official';
+import { newApi } from './providers/newapi';
 import { opencodeGo } from './providers/opencode-go';
 import type { BalanceProvider, PluginProvider } from './types';
 
 /** 内置服务商：编译期登记，顺序即优先级。 */
-export const BUILTIN_PROVIDERS: BalanceProvider[] = [opencodeGo, commandCode, deepseekOfficial, deepseekAccount];
+export const BUILTIN_PROVIDERS: BalanceProvider[] = [
+  opencodeGo,
+  commandCode,
+  deepseekOfficial,
+  deepseekAccount,
+  newApi,
+];
+
+/** 内置 id + 别名（第三方注册时**一个都不许占**：否则它会在某个路由名下静默顶掉内置取数） */
+function builtinIds(): string[] {
+  return BUILTIN_PROVIDERS.flatMap((p) => [p.id, ...(p.aliases ?? [])]);
+}
 
 /** 第三方运行时注册：provider id → 定义。 */
 const external = new Map<string, PluginProvider>();
@@ -27,7 +39,7 @@ export function registerBalanceProvider(def: PluginProvider): () => void {
   if (!def || typeof def !== 'object') throw new TypeError('provider 定义必须是对象');
   if (typeof def.id !== 'string' || def.id.length === 0) throw new TypeError('id 必须是非空字符串');
   if (typeof def.fetch !== 'function') throw new TypeError('fetch 必须是函数');
-  if (BUILTIN_PROVIDERS.some((p) => p.id === def.id)) throw new Error('不能覆盖内置服务商: ' + def.id);
+  if (builtinIds().includes(def.id)) throw new Error('不能覆盖内置服务商: ' + def.id);
   if (external.has(def.id)) throw new Error('该服务商 id 已被注册: ' + def.id);
 
   external.set(def.id, def);
@@ -46,7 +58,14 @@ export function listBalanceProviders(): { builtin: string[]; external: string[] 
   return { builtin: BUILTIN_PROVIDERS.map((p) => p.id), external: [...external.keys()] };
 }
 
-/** provider id → 定义：先内置，再第三方；都没有 = 不支持。 */
+/**
+ * provider id → 定义：先内置（含别名），再第三方；都没有 = 不支持。
+ *
+ * 别名只参与**命中**，不改变返回的定义 —— 结果里的 `provider` 由取数上下文原样带回，
+ * 于是气泡/日志里看到的永远是 DSH 真正报告的那个 id。
+ */
 export function matchBalanceProvider(provider: string): BalanceProvider | PluginProvider | undefined {
-  return BUILTIN_PROVIDERS.find((p) => p.id === provider) ?? external.get(provider);
+  return (
+    BUILTIN_PROVIDERS.find((p) => p.id === provider || (p.aliases ?? []).includes(provider)) ?? external.get(provider)
+  );
 }

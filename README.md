@@ -187,9 +187,10 @@ npm run build && npm run standalone   # 仓库里（先构建）
 - **DeepSeek 官方（`deepseek-official`）**：气泡显示账户余额（如 `余额 ¥8.79`）；余额按 ¥20 满额折算成已用百分比，分 6 档播放动画（钱袋满溢 → 金袋叮当 → 钱袋如常 → 数金皱眉 → 袋空如洗 → 分文不剩）
 - **OpenCode Zen Go（`opencode-go`）**：气泡显示 5h/周/月 三个额度窗口中最先告急的一个（如 `周额度已用 88%` / `2.5 天重置`），同样按已用百分比分档
 - **Command Code（`commandcode`，含 GOAT 等套餐）**：气泡显示 5h/周/月 三个额度窗口中最先告急的一个（与 opencode 同一口径：剩余额度最少者，通常先报 5h）；套餐无窗口限制时只报月度窗
+- **New API 自建网关（`newapi`，别名 `new-api` / `new_api`）**：气泡显示账户余额（如 `余额 $994.01`，币种跟站点自己的展示类型走）——剩余 = 总额度（`/v1/dashboard/billing/subscription` 的 `hard_limit_usd`）− 已用（`/v1/dashboard/billing/usage` 的 `total_usage ÷ 100`），余额按「总额度」满额折算成已用百分比分 6 档播放动画。**端点与凭证名都不写死**：取自 DSH 里这条 provider 路由自己的 `baseURL` / `apiKeyEnv`，插件不内置任何地址
 - **暂不支持的服务商**：未登记余额接口的服务商**不播档位动画，改为弹一句文字说明**——第一行「当前服务商暂不支持余额查询」，第二行报出当前 provider id（便于自查）；缺凭证 / 抓取失败同理（原因写在第二行）。自动轮询只在**原因变化**时弹一次（不反复打扰），手动 `/balance` 或桌面右键「查看余额」则每次都会弹
 - **按宠物开关**：`pets[i].balanceEnabled`（必填布尔）控制该宠物是否触发余额动画/显示气泡
-- **所需凭据**：对应 provider 的 API key（`deepseek-official` → `DEEPSEEK_API_KEY`；`opencode-go` → `OPENCODE_GO_API_KEY`；`commandcode` → `COMMANDCODE_API_KEY`），在 DSH 凭据中配置后启用；未匹配的服务商不触发动画，改为弹上面的文字说明气泡
+- **所需凭据**：对应 provider 的 API key（`deepseek-official` → `DEEPSEEK_API_KEY`；`opencode-go` → `OPENCODE_GO_API_KEY`；`commandcode` → `COMMANDCODE_API_KEY`），在 DSH 凭据中配置后启用；**`newapi` 例外——凭证名不写死**，取该 provider 路由在 DSH 模型设置里填的 `apiKeyEnv`（如 `NEWAPI_API_KEY`），地址取同一条路由的 `baseURL`，两者都缺时气泡会明确报出缺的是哪一项；未匹配的服务商不触发动画，改为弹上面的文字说明气泡
 
 ## ⚙️ 碎碎念与对话
 

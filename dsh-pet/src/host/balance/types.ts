@@ -13,9 +13,12 @@
  * - `ref`：DSH credentialRef 名（如 `OPENCODE_GO_API_KEY`）—— 由调用方经 `ctx.credentials.resolve`
  *   解析后注入，插件自己不读凭证存储；
  * - `none`：该路由**没有** API Key（账号路由）。凭证是 DSH 账号服务持有的授权记录，只能经服务
- *   查询，见 ./providers/deepseek-account.ts。
+ *   查询，见 ./providers/deepseek-account.ts；
+ * - `route`：端点与凭证**都在 DSH 的路由配置里**（自建网关：同一个程序部署在谁的域名上、被起成
+ *   什么名字由部署方决定）。名字与地址取自 `llm-pi-ai.providers.<id>` 的 `apiKeyEnv` / `baseURL`，
+ *   插件不内置任何地址、也不猜凭证叫什么名字。见 ./providers/newapi.ts。
  */
-export type CredentialSpec = { mode: 'ref'; ref: string } | { mode: 'none' };
+export type CredentialSpec = { mode: 'ref'; ref: string } | { mode: 'none' } | { mode: 'route' };
 
 /**
  * 取数上下文：所有服务商的 `fetch` 收到的都是**同一个**形状，各取所需。
@@ -29,6 +32,8 @@ export interface BalanceFetchContext {
   key: string;
   /** 账号余额查询（调用方注入 ctx.deepseekAccount.getBalance）；仅 `mode === 'none'` 使用 */
   resolveAccount?: () => Promise<AccountBalanceSnapshot | null | undefined>;
+  /** 命中的路由配置（只有 `credential.mode === 'route'` 会带）；其余路由读不到这个字段 */
+  route?: { baseURL?: string };
 }
 
 /**
@@ -56,6 +61,11 @@ export interface PluginFetchContext {
 export interface BalanceProvider {
   /** 可命中的 provider id（agentDefaultModel 报告的 id） */
   id: string;
+  /**
+   * 额外命中的 id（同一套取数的常见别名，如 `new-api` / `new_api`）。
+   * 只影响**匹配**：结果里的 `provider` 永远是真正命中的那个 id。
+   */
+  aliases?: string[];
   /** 凭证来源（决定 queryBalance 是解析凭证还是调服务） */
   credential: CredentialSpec;
   /**

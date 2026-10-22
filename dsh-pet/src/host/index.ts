@@ -101,7 +101,8 @@ import { join, normalize, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths';
 import { credentialRef } from '@deepseek-ai/dsh-credentials';
-import { listBalanceProviders, queryBalance, registerBalanceProvider } from './balance/index';
+import { findRouteProfile, listBalanceProviders, queryBalance, registerBalanceProvider } from './balance/index';
+import type { RouteRow } from './balance/index';
 import { generateWhisper } from './whisper';
 import { automaticWhisperSchedule } from './whisper-policy';
 import { generateChat, type ChatMemoryMessage } from './chat';
@@ -173,6 +174,16 @@ import {
 export const name = 'pet';
 /** 需要注入的服务：webServer（路由）+ agentDefaultModel（当前服务商）+ credentials（凭证）+ llm（对话模型调用）+ commands（/balance 斜杠命令）+ connection（桌面 Helper「打开网站」用的已鉴权站点 URL） */
 export const inject = ['webServer', 'agentDefaultModel', 'credentials', 'llm', 'commands', 'connection'];
+
+/**
+ * `ctx.configEditor`（DSH base bundle 自带）的最小形状：只用到「列出生效配置行」这一个方法。
+ * 不 import 该服务的类型是为了不把宿主内部包变成编译期依赖（本插件的 peer 清单里没有它）。
+ */
+interface ConfigEditorLike {
+  configuration?: () => Array<{
+    entry?: { options?: { name?: unknown; config?: unknown }; fiber?: { config?: unknown } };
+  }>;
+}
 
 /** 本包目录：宿主构建产物位于 lib/，其上一级即包根。 */
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -888,6 +899,35 @@ export function apply(ctx: any): void {
     return { version, locale: 'zh-CN', timezoneOffsetSeconds: -new Date().getTimezoneOffset() * 60 };
   };
 
+  /**
+   * 已生效的插件配置行（给余额的「自建网关」路由读端点/凭证名用）。
+   *
+   * 为什么不走 `ctx.settings`：那是**宿主版本相关**的读法（当前 DSH 的 `ctx.settings` 只有
+   * describe / update，没有按命名空间取值的 `get`）。`configEditor`（base bundle 自带）返回的就是
+   * **已叠加各层 patch 后**的生效配置，正是我们要的那份。
+   *
+   * 每行给两版：`fiber.config`（运行中的实值，可热更新字段是 `{ get() }` 包裹）优先，其次是
+   * `options.config`（原始层，兜住「该 fiber 还没起来」的情况）。找路由时先命中的行说了算。
+   * 拿不到服务（独立模式 / 老宿主）→ 空数组：自建网关路由据此报「缺少 DSH 路由配置」，不崩。
+   */
+  const routeRows = (): RouteRow[] => {
+    const rows: RouteRow[] = [];
+    try {
+      const editor = ctx.get('configEditor', false) as ConfigEditorLike | undefined;
+      if (typeof editor?.configuration !== 'function') return rows;
+      for (const row of editor.configuration()) {
+        const name = typeof row?.entry?.options?.name === 'string' ? row.entry.options.name : undefined;
+        const live = row?.entry?.fiber?.config;
+        const raw = row?.entry?.options?.config;
+        if (live !== undefined) rows.push({ name, config: live });
+        if (raw !== undefined) rows.push({ name, config: raw });
+      }
+    } catch {
+      // 配置快照读不到不影响其余功能：余额按「缺路由配置」报，其余照常
+    }
+    return rows;
+  };
+
   const refreshBalance = async (manual = false): Promise<void> => {
     const mark = <T>(v: T): T | (T & { manual: true }) => (manual ? { ...v, manual: true } : v);
     try {
@@ -906,6 +946,9 @@ export function apply(ctx: any): void {
           if (!account) return undefined;
           return account.getBalance(accountClientMetadata());
         },
+        // 自建网关（`credential.mode === 'route'`：new-api 一类）的端点与凭证名都在 DSH 路由配置里，
+        // 每次刷新现读——改了 baseURL / 换了 apiKeyEnv 下一拍自然跟上，不必重启插件。
+        (provider) => findRouteProfile(routeRows(), provider),
       );
       state.writeSection('balance', mark(result));
     } catch (e) {

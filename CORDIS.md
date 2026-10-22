@@ -65,6 +65,11 @@ ctx.get('petApi7340').progress('main');
 
 入口返回 `{ balance }`。
 
+> 内置服务商除了 `opencode-go` / `commandcode` / `deepseek-official` / `deepseek-account`，
+> 还有 `newapi`（New API 自建网关，别名 `new-api` / `new_api`）。它**不内置任何地址**：
+> 端点与服务商凭证名都取自 DSH 该 provider 路由配置里的 `baseURL` / `apiKeyEnv`
+> （`llm-pi-ai.providers.<id>`），未配置时余额气泡会明确报出缺的是哪一项。
+
 ### balance.register
 
 第三方插件注册自己的余额查询。宿主不再为每家服务商改代码。
@@ -121,5 +126,5 @@ export function apply(ctx) {
 
 ```js
 ctx.get('petApi7340').balance.list();
-// { builtin: ['opencode-go', 'commandcode', 'deepseek-official', 'deepseek-account'], external: ['my-gateway'] }
+// { builtin: ['opencode-go', 'commandcode', 'deepseek-official', 'deepseek-account', 'newapi'], external: ['my-gateway'] }
 ```

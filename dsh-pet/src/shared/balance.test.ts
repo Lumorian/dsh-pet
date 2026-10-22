@@ -164,6 +164,16 @@ describe('balanceBubbleView —— 不可用状态必须给出可读的文字说
       tier: 'idle',
     });
     assert.equal(usd[2]?.text, '）$12.50');
+
+    // 其它币种（自建网关站点可能按别的币种展示额度）：用「代码 + 空格」，绝不一律套 ¥
+    const eur = balanceBubbleView({
+      provider: 'newapi',
+      ok: true,
+      shape: 'money',
+      wallets: [{ currency: 'EUR', total: '3.20', granted: '0.00', toppedUp: '3.20' }],
+      tier: undefined,
+    });
+    assert.equal(eur[0]?.text, '余额 EUR 3.20');
   });
 });
 

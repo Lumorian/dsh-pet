@@ -9,12 +9,15 @@
  *   加一个内置服务商 = 加一个 provider 文件 + 在 ./registry.ts 的内置数组里加一行；
  *   第三方服务商不进这里 —— 走 `registerBalanceProvider`（宿主经 `ctx.provide('petApi7340')` 暴露）；
  * - key 由调用方经 DSH 官方 credentialRef 解析后注入（不直接读 .credentials.yaml）；
- * - 例外：DSH 账号路由（`deepseek-account`，免费额度 / 平台登录）**没有** API Key，它的凭证是
+ * - 例外一：DSH 账号路由（`deepseek-account`，免费额度 / 平台登录）**没有** API Key，它的凭证是
  *   账号服务持有的授权记录，由调用方经 `resolveAccount` 注入查询（同样不直接读凭证存储）；
+ * - 例外二：自建网关（`newapi`，`credential.mode === 'route'`）**不内置地址**，端点与凭证引用名
+ *   都从 DSH 自己的路由配置读（调用方经 `resolveRoute` 注入，见 ./route-lookup.ts）；
  * - 第三方注册的 provider 没有 `credential`：宿主不解析 key、也不给 `resolveAccount`；
  * - 失败口径统一：provider 只负责成功路径，任何失败一律 `throw`，这里统一落成 `fetch-error`。
  */
 import { BUILTIN_PROVIDERS, matchBalanceProvider } from './registry';
+import type { RouteProfile } from './route-lookup';
 import type { AccountBalanceSnapshot, BalanceResult } from './types';
 
 export { BUILTIN_PROVIDERS, listBalanceProviders, matchBalanceProvider, registerBalanceProvider } from './registry';
@@ -41,17 +44,25 @@ function fetchFailed(provider: string, e: unknown): BalanceResult {
 }
 
 /**
+ * 路由配置查询（自建网关用）：provider id → 该路由在 DSH 里配的端点与凭证引用名。
+ * 由调用方注入（见 ./route-lookup.ts）；缺省时 `credential.mode === 'route'` 的路由报 `credential-missing`。
+ */
+export type ResolveRoute = (provider: string) => RouteProfile | undefined;
+
+/**
  * 按当前服务商查询余额。
  * @param provider agentDefaultModel.currentSelection().provider
  * @param resolveKey 凭证解析：ref 名 → key（由调用方注入 ctx.credentials.resolve）
  * @param resolveAccount 账号余额查询（由调用方注入 ctx.deepseekAccount.getBalance）；
  *   只被 `deepseek-account` 用到。缺省时该路由报 `credential-missing`（账号服务不在场）
+ * @param resolveRoute 路由配置查询；只被 `credential.mode === 'route'` 的自建网关用
  * @returns 结构化结果：成功 / 不支持 / 缺凭证 / 抓取失败（失败带 message，绝不返回伪造数字）
  */
 export async function queryBalance(
   provider: string,
   resolveKey: (ref: string) => Promise<string | undefined>,
   resolveAccount?: () => Promise<AccountBalanceSnapshot | null | undefined>,
+  resolveRoute?: ResolveRoute,
 ): Promise<BalanceResult> {
   const def = matchBalanceProvider(provider);
   if (!def) return failed(provider, 'unsupported');
@@ -69,22 +80,37 @@ export async function queryBalance(
   // 内置路由：凭证前置检查放在 try 之外 —— 解析凭证本身抛错属于意外异常，由调用方（refreshBalance）
   // 兜底。账号路由没有 API Key，改为判定「账号服务在不在场」。
   let key = '';
+  let route: { baseURL?: string } | undefined;
   if (def.credential.mode === 'ref') {
     const resolved = await resolveKey(def.credential.ref);
     if (!resolved) return failed(provider, 'credential-missing', '缺少凭证 ' + def.credential.ref);
     key = resolved;
+  } else if (def.credential.mode === 'route') {
+    // 自建网关：端点与凭证名都在 DSH 的路由配置里。三种缺法分开报，用户一眼知道该去补哪一项
+    // （没这条路由 / 没填 apiKeyEnv / 填了但凭证库里没有），绝不退化成「不支持」。
+    const profile = resolveRoute?.(provider);
+    if (!profile) return failed(provider, 'credential-missing', '缺少 DSH 路由配置（' + provider + '）');
+    if (!profile.apiKeyEnv) {
+      return failed(provider, 'credential-missing', '路由 ' + provider + ' 未配置 apiKeyEnv');
+    }
+    const resolved = await resolveKey(profile.apiKeyEnv);
+    if (!resolved) return failed(provider, 'credential-missing', '缺少凭证 ' + profile.apiKeyEnv);
+    key = resolved;
+    route = { ...(profile.baseURL === undefined ? {} : { baseURL: profile.baseURL }) };
   } else if (!resolveAccount) {
     return failed(provider, 'credential-missing', '缺少账号服务（' + provider + '）');
   }
 
   try {
-    return await def.fetch({ provider, key, resolveAccount });
+    return await def.fetch({ provider, key, resolveAccount, ...(route === undefined ? {} : { route }) });
   } catch (e) {
     return fetchFailed(provider, e);
   }
 }
 
 // ---- 对外再导出：调用方（宿主与测试）只需要认这一个入口 ----
+export { findRouteProfile, type RouteProfile, type RouteRow } from './route-lookup';
+export { newApiBillingBase, parseNewApi } from './providers/newapi';
 export { parseAccountBalance } from './providers/deepseek-account';
 export { parseCommandCode } from './providers/commandcode';
 export type {
