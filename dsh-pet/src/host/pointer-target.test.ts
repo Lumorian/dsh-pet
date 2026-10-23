@@ -379,22 +379,27 @@ describe('守卫：窗口余量口径（收紧档 = 原生 Wayland 的"点击穿
     assert.deepEqual(helperMargins(462, 195, false, 'expand'), helperMargins(462, 195, false, 'base'));
   });
 
-  test('收紧档：base 贴着宠物（窗口 486×284，而不是 924×744）', () => {
+  test('收紧档：base 贴着宠物（窗口 = 宠物 + 2×内边距，而不是 924×744）', () => {
     const m = helperMargins(462, 195, true, 'base');
-    assert.deepEqual(m, { t: 12, r: 12, b: 12, l: 12 });
+    assert.deepEqual(m, { t: helperPad, r: helperPad, b: helperPad, l: helperPad });
     // 窗口宽度从 3 倍宠物收到「宠物 + 24px」：这才是"点哪里就是点哪里"。
     // 高度同样只剩 462×9/16 + bottomPad + 24 ≈ 284（宽档是 744）。
     const wide = 462 + 231 * 2;
     const tight = 462 + m.l + m.r;
-    assert.equal(tight, 486, '收紧后宽度 = 宠物宽 + 两侧 12px');
+    assert.equal(tight, 462 + helperPad * 2, '收紧后宽度 = 宠物宽 + 两侧内边距');
     assert.ok(tight < wide * 0.55, '收紧后的宽度必须明显小于宽档：' + tight + ' vs ' + wide);
   });
 
   test('收紧档 + 气泡：只撑上边到气泡高度，左右下仍贴边（气泡悬在头顶）', () => {
     const m = helperMargins(462, 195, true, 'bubble');
-    assert.deepEqual(m, { t: 195, r: 12, b: 12, l: 12 });
+    assert.deepEqual(m, { t: 195, r: helperPad, b: helperPad, l: helperPad });
     // 气泡比最小内边距还矮时不能把窗口压到 0（贴边会裁掉提示描边）
-    assert.deepEqual(helperMargins(462, 0, true, 'bubble'), { t: 12, r: 12, b: 12, l: 12 });
+    assert.deepEqual(helperMargins(462, 0, true, 'bubble'), {
+      t: helperPad,
+      r: helperPad,
+      b: helperPad,
+      l: helperPad,
+    });
   });
 
   test('收紧档 + 菜单/对话/拖拽：整圈撑回宽档（面板是浮在侧边的，必须有空间不被裁）', () => {
@@ -450,7 +455,7 @@ describe('守卫：窗口余量口径（收紧档 = 原生 Wayland 的"点击穿
     );
     assert.ok(/updateMargin\(\) \{/.test(sprite), '必须有 updateMargin（档位重算的唯一出口）');
     assert.ok(/if \(mode === this\._marginMode\) return;/.test(sprite), '档位没变必须直接返回（逐帧路径不能重设窗口）');
-    // 撑回宽档的四类来源：菜单/对话/可点余额气泡、拖拽、点击积分卡片
+    // 撑回宽档的三类来源：菜单/对话/可点余额气泡、点击积分卡片（拖拽已改为 grabClamp，不再撑开）
     assert.ok(/marginMode\(\) \{/.test(sprite), '必须有 marginMode（哪一档余量的唯一判定处）');
     assert.ok(
       /if \(this\.menuOpen \|\| this\.chatOpen \|\| this\.balanceClickable\(\)\) return 'expand';/.test(sprite),
@@ -466,6 +471,77 @@ describe('守卫：窗口余量口径（收紧档 = 原生 Wayland 的"点击穿
     assert.ok(
       /syncInputBusy\(\) \{\s*(\/\/[^\n]*\n\s*)*this\.updateMargin\(\);/.test(sprite),
       'syncInputBusy 必须调用 updateMargin',
+    );
+  });
+
+  test('收紧档整窗可点（B）：命中区外的余量不再放行穿透，宽档不变', () => {
+    const { decideWindowIgnore } = require(helper + 'pointer-target.js');
+    // 窗口 466×284（宠物 462 + 两侧 2px），光标落在窗口内、身体命中区外的右下角
+    const bounds = { x: 100, y: 100, width: 466, height: 284 };
+    const margins = { l: 2, t: 2 };
+    const corner = { x: 100 + 450, y: 100 + 270 }; // 余量区（远离身体命中区）
+    // 宽档：余量区保持穿透（原有行为，逐位不变）
+    assert.equal(
+      decideWindowIgnore(bounds, corner, true, false, 0, undefined, margins, false),
+      true,
+      '宽档余量区仍应穿透（那里有余量，整窗可点会挡下层应用）',
+    );
+    // 收紧档：整窗可点 → 同一位置不穿透，控件/按钮才点得到
+    assert.equal(
+      decideWindowIgnore(bounds, corner, true, false, 0, undefined, margins, true),
+      false,
+      '收紧档整窗可点：窗口内不该再放行穿透（否则贴边按钮点不到）',
+    );
+    // 窗外永远穿透（两种档位一致）
+    assert.equal(decideWindowIgnore(bounds, { x: 10, y: 10 }, true, false, 0, undefined, margins, true), true);
+    const main = readSource(helper + 'main.js');
+    assert.ok(/mg, TIGHT_WINDOW\)/.test(main), '兜底轮询必须把收紧标记传给判定（整窗可点）');
+    const sprite = readSource(helper + 'sprite.js');
+    assert.ok(
+      /this\.setInteractive\(inBody \|\| inWindow\)/.test(sprite),
+      '收紧档悬停时必须整窗可交互，否则渲染端那条通道仍只认身体',
+    );
+  });
+
+  test('点击不许改窗口尺寸；resize 兜底必须认得出「自己改的尺寸」', () => {
+    const sprite = readSource(helper + 'sprite.js');
+    // 收紧档下「撑整圈」的拖拽来源必须挂在 dragging（越过阈值）上：按一下就撑开的话，
+    // 窗口会在按下的那一帧放大、松手再缩回，而窗口尺寸与 sprite 偏移不同帧生效 → 宠物闪一下。
+    // 拖拽**一律不改窗口尺寸**（连 dragState.dragging 都不行）：撑开的那一帧窗口先变大、
+    // sprite 偏移下一帧才跟上，在 niri 这类合成器上就是「一拖就瞬移」。用 grabClamp 夹目标替代。
+    assert.ok(
+      !/dragState[.\s]*&&\s*this\.dragState\.(active|dragging)\)\s*return 'expand'/.test(sprite),
+      'marginMode 不得再因拖拽返回 expand（窗口尺寸一变就瞬移，拖拽改走 grabClamp）',
+    );
+    // 收紧档撑开窗口时**只许向右下长**：左边距/上边距钉死为最小内边距，sprite 偏移因此恒定。
+    // 否则合成器保持窗口左上角、而 sprite 偏移变成 231 → 宠物像素整体向右下挪 219px
+    //（实测：右键开菜单，宠物 bbox 从 1354,663 跳到 1701,663）。
+    assert.ok(
+      /next\.r \+= next\.l - pad;\s*\n\s*next\.b \+= next\.t - pad;\s*\n\s*next\.l = pad;\s*\n\s*next\.t = pad;/.test(
+        sprite,
+      ),
+      '收紧档撑开必须只往右下长（左/上钉死 12px），否则窗口一变大宠物就向右下瞬移',
+    );
+    assert.ok(/grabClamp\(targetX, targetY\) \{/.test(sprite), '必须有 grabClamp（拖拽目标夹进窗口的唯一口径）');
+    assert.ok(
+      /if \(!TIGHT_WINDOW\) return \{ x: targetX, y: targetY \};/.test(sprite),
+      '宽档必须原样返回（Windows/macOS/X11 的拖拽行为逐位不变）',
+    );
+    assert.ok(
+      /const t = this\.grabClamp\(d\.petX \+ dx, d\.petY \+ dy\);/.test(sprite),
+      'onPointerMove 必须经 grabClamp 设 dragTarget（否则收紧档下指针一出窗就丢 pointerup）',
+    );
+    // resize 兜底（renderer.js）原本会在任何尺寸变化后 position()，而 position() 按**配置角落/
+    // 上次落点**重摆：档位一变就会把宠物瞬移回角落。必须能认出自己改的那一次。
+    assert.ok(/isOwnMarginResize\(\) \{/.test(sprite), '必须能认出「本次 resize 是自己改余量引起的」');
+    assert.ok(
+      /this\.marginResizeAt = performance\.now\(\)/.test(sprite),
+      'updateMargin 改尺寸时必须记下时刻（窗口尺寸被系统夹过时的第二道判据）',
+    );
+    const renderer = readSource(helper + 'renderer.js');
+    assert.ok(
+      /if \(s\.isOwnMarginResize\(\)\) continue;/.test(renderer),
+      'resize 兜底必须先跳过自己改的尺寸变化，否则档位一变就把宠物按配置角落重摆（点一下就瞬移）',
     );
   });
 });

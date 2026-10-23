@@ -523,7 +523,8 @@ function createPetWindows() {
       const zone = pointerZone(b, point, mg);
       const nextMs = !busy && zone === 'margin' ? (offBodyMs.get(win.id) ?? 0) + POINTER_POLL_MS : 0;
       offBodyMs.set(win.id, nextMs);
-      const next = decideWindowIgnore(b, point, ignoring, busy, nextMs, inputRegions.get(win.id), mg);
+      // 收紧档：窗口已贴到宠物身上，整窗可点（margin 分区不再放行穿透，见 pointer-target.js）
+      const next = decideWindowIgnore(b, point, ignoring, busy, nextMs, inputRegions.get(win.id), mg, TIGHT_WINDOW);
       if (next !== ignoring) setWindowIgnore(win, next);
     }, POINTER_POLL_MS);
     // [置顶看门狗] 建窗时那次 setAlwaysOnTop 之后再没人复查过：外部任何一次 z 序扰动都能让桌宠
@@ -925,6 +926,7 @@ app.whenReady().then(() => {
             0,
             input,
             winMargins.get(win.id),
+            TIGHT_WINDOW,
           )
         : !interactive;
     setWindowIgnore(win, ignoring);

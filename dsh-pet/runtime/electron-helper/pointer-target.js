@@ -106,9 +106,10 @@ function pointerZone(bounds, point, margins) {
  * @param {{dragging:boolean, rects:Array<{x:number,y:number,width:number,height:number}>}} [input]
  *   新渲染端上报的窗口局部交互矩形。菜单/聊天框只占自己的区域；拖拽仍拥有完整输入租约。
  * @param {{l:number,t:number}} [margins] 渲染端上报的窗口余量（DIP），见 spriteHitRect
+ * @param {boolean} [wholeWindow=false] 整窗可点（收紧档 = 窗口已贴到宠物身上，命中区外的余量不再放行穿透）
  * @returns {boolean} 新的穿透状态
  */
-function decideWindowIgnore(bounds, point, ignoring, busy, offBodyMs = 0, input, margins) {
+function decideWindowIgnore(bounds, point, ignoring, busy, offBodyMs = 0, input, margins, wholeWindow = false) {
   if (busy) {
     if (!input || input.dragging) return false; // 兼容旧渲染端；拖拽租约绝不被位置判定打断
     const inControl = input.rects.some(
@@ -122,6 +123,9 @@ function decideWindowIgnore(bounds, point, ignoring, busy, offBodyMs = 0, input,
   }
   const zone = pointerZone(bounds, point, margins);
   if (zone === 'outside') return true; // 窗外：恢复穿透
+  // 整窗可点（收紧档）：窗口已经贴到宠物身上，窗口内几乎没有"多余的透明区"，
+  // 再按身体命中区分档就只会让贴边的控件/按钮点不到（用户报的"复制按钮点不到"）。
+  if (wholeWindow && zone === 'margin') return false;
   if (zone === 'body') return false; // 宠物身上：可交互
   if (offBodyMs >= OFF_BODY_RELEASE_MS) return true; // 余量区停留超时：恢复穿透
   return ignoring; // 余量区：保持（菜单/弹窗由 busy 覆盖）

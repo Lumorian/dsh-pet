@@ -18,8 +18,14 @@
 /** 宽档外扩比例（相对宠物尺寸） */
 export const WINDOW_MARGIN_RATIO = 0.5;
 
-/** 收紧档保留的内边距（px）：够放悬浮提示与拖拽反馈，又不会重新变成"隐形墙" */
-export const MIN_TIGHT_PAD_PX = 12;
+/**
+ * 收紧档保留的内边距（px）。
+ *
+ * 从 12 收到 2：桌面窗口与宠物本体之间的透明边越窄，贴在宠物边上的控件（气泡配图、悬浮提示、
+ * 对话按钮……）越不容易被窗口边缘裁掉。收紧档下整窗可点（见 pointer-target.js 的 wholeWindow），
+ * 所以这点余量不再需要"够放悬浮提示"——提示本来就在窗口之内画。
+ */
+export const MIN_TIGHT_PAD_PX = 2;
 
 /** 余量的三种占用情形：常态 / 有气泡 / 菜单或对话弹窗开着 */
 export type WindowMarginMode = 'base' | 'bubble' | 'expand';

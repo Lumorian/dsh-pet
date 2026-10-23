@@ -160,6 +160,11 @@ if (window.petBridge && window.petBridge.onDisplays) {
 window.addEventListener('resize', () => {
   for (const s of sprites) {
     if (s.dragState.active || s.throwRef !== null || s.moveRef !== null) continue;
+    // 余量档位变化（气泡上边撑开、菜单/对话/拖拽/点击积分卡片撑整圈）本来就会改窗口尺寸——
+    // 那是我们**主动**改的，sprite 偏移与窗口包围盒已经成对改好，宠物在屏幕上的位置没变。
+    // 这里再 position() 一遍等于按配置角落/上次落点重摆，用户看到的就是「点一下桌宠就瞬移」。
+    // 只有**非**余量引起的尺寸变化（如 Windows 的 WM_DPICHANGED）才需要按当前位置重规整。
+    if (s.isOwnMarginResize()) continue;
     s.position();
   }
 });

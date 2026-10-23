@@ -89,6 +89,20 @@ macOS 的 Safari/WKWebView 不认 webm 的 alpha 通道（会渲染黑底），�
 - **独立透明置顶窗口**：为**每只桌面宠物**各开一个**局部小窗口**（尺寸 = 宠物包围盒 + 四周外扩余量，为气泡/弹窗预留空间；透明、置顶、跳过任务栏），窗口跟随宠物移动；窗口**永不铺满屏幕**（全屏透明置顶窗会触发 Windows DWM 视频合成黑屏：需「透明置顶 + 非点击穿透 + 可聚焦且已聚焦 + 完整盖住视频窗」四项齐备，与窗口尺寸无关，详见 `runtime/electron-helper/main.js` 文件头注释；桌宠悬停时会翻成可交互、`show()` 也会聚焦，故全屏画布形态仍不做）。与浏览器一致，只有宠物**身体命中区**可交互，窗口内其余透明像素与窗口外一律**点击穿透**到下层应用（`setIgnoreMouseEvents` + 悬停命中翻转）
   - **原生 Wayland 特例（收紧档）**：Electron 43 的 `setIgnoreMouseEvents` 在 Linux 只有 X11 分支（Wayland 下静默空操作），`screen.getCursorScreenPoint()` 在 Wayland 下也不可用——这类会话里整窗穿透与光标兜底**同时失效**，924×744 的窗口会整块吞掉鼠标（表现为「窗口矩形内到处都算点在桌宠上」）。因此按会话自动切到收紧档：窗口收到「宠物本体 + 12px」，只有气泡显示时加上边、右键菜单/对话/积分卡片/拖拽时整圈撑回原尺寸（口径在 `src/shared/window.ts`，主进程侧镜像在 `runtime/electron-helper/window-margin.js`）。Windows / macOS / X11 不受影响，余量仍是 `0.5×size`。
   - 排障开关：`DSH_PET_TIGHT_WINDOW=0` 强制关（回到旧行为）、`=1` 强制开（在其它平台验证收紧档外观）
+  - **合成器自绘的窗口边框（niri 等 wlroots 合成器）**：桌宠窗口是**透明小窗**，但 niri 会给**每个 toplevel 的窗口矩形**画一圈 focus ring（默认 4px、`#7fc8ff`）——窗口一拿到焦点（点/拖宠物、点对话输入框）就会多出一个**矩形边框**套在宠物外面，看着像给桌宠加了框；浏览器内的宠物是页面里的 overlay，没有这层窗口装饰，所以两边观感不同。另外全局 `geometry-corner-radius` + `clip-to-geometry` 还会把宠物四角裁掉。这两件事**只能在合成器侧关**（Electron 拿不到「别画窗口环」的协议），加一条 window-rule 即可，一次性：
+    ```kdl
+    // ~/.config/niri/config.kdl
+    window-rule {
+        match app-id="electron" title=r#"^dsh-pet"#
+        focus-ring { off; }
+        border { off; }
+        shadow { off; }
+        draw-border-with-background false
+        geometry-corner-radius 0
+        clip-to-geometry false
+    }
+    ```
+    匹配口径：Electron 在 X11（含 XWayland）下的 app-id 就是 `electron`（`app.setName()` 改不动它），所以靠标题前缀 `dsh-pet` 收窄到桌宠——标题来自 `runtime/electron-helper/index.html` 的 `<title>`，改标题时同步改这条规则。改完 `niri validate -c ~/.config/niri/config.kdl` 校验、`niri msg action load-config-file` 热重载即可（实测：桌宠窗口焦点环消失，其它窗口的焦点环照常）。
 - **与浏览器严格同行为**（同一份源码两个外壳）：宠物功能/文案完全对齐——多开宠物同屏显示、角落+边距定位、同一动画链/点击/拖拽/余额档位动画与富余额气泡；**页面配置的显示位置由 `display` 字段决定，两端宠物内容只可能一致，不会出现"一个有另一个没有"**。系统通知是独立于宠物的能力（见配置节 `notificationsEnabled`），不在此列
 - **共享纯逻辑**：待机选择 / 移动几何 / 余额折算 / 配置校验 / 通知映射都在 `src/shared/`，浏览器 bundle 与桌面 `shared-core.js`（构建产物，`window.PetShared`）共用同一份源码，只有最外层的渲染壳不同（React vs 纯 DOM）
 

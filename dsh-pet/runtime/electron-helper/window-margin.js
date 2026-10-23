@@ -17,8 +17,8 @@
 
 'use strict';
 
-/** 收紧档保留的内边距（px），与 shared/window.ts 的 MIN_TIGHT_PAD_PX 同值 */
-const MIN_TIGHT_PAD_PX = 12;
+/** 收紧档保留的内边距（px），与 shared/window.ts 的 MIN_TIGHT_PAD_PX 同值（12 → 2：见该处注释） */
+const MIN_TIGHT_PAD_PX = 2;
 
 /**
  * 本会话是否需要收紧窗口（= 没有整窗点击穿透能力）。

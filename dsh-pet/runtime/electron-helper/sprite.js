@@ -53,6 +53,9 @@ class PetSprite {
     const fontConf = pet.font || config.font || S.DEFAULT_FONT;
     this.bubbleTopMargin = S.bubbleTopMarginPx(fontConf, this.size);
     this.margin = S.windowMargins(this.size, this.bubbleTopMargin, TIGHT_WINDOW, 'base');
+    // 收紧档拖拽的抓取内缩（px）：目标被夹进窗口时四边各留这么多，保证指针留在窗口内
+    // （见 grabClamp；窗口只有宠物那么大时，宠物追到边上指针就已经贴边了）
+    this.GRAB_INSET = 6;
     window.__dshPetDebug.winMargin = this.margin;
     // 宠物包围盒左上角在【工作区】坐标系里的位置（本窗口的位置 = 宠物的位置）
     this.pos = { x: 0, y: 0 };
@@ -132,6 +135,9 @@ class PetSprite {
     this.bubbleShown = false;
     // 当前余量档位（'base' | 'bubble' | 'expand'）：只在档位变化时重设窗口，避免逐帧抖尺寸
     this._marginMode = 'base';
+    // 最近一次**主动**改窗口尺寸的时刻（updateMargin 里写）：renderer 的 resize 兜底据此分清
+    // 「自己改的尺寸」与「被系统改的尺寸」，见 isOwnMarginResize
+    this.marginResizeAt = 0;
     // 悬浮提示（替代原生 title 属性）：显隐 + 最近一次光标位置（**视口坐标**，见 renderTip）
     this.tipOn = false;
     this.tipCursor = null;
@@ -1294,8 +1300,11 @@ class PetSprite {
     this.dragTrail.push({ t: now, x: toLocal(e.screenX), y: toLocal(e.screenY) });
     this.dragTrail = S.trimTrail(this.dragTrail, now);
     // 弹簧目标 = 按下时的宠物位置 + 指针屏幕增量（窗口怎么动都不影响坐标）——不再硬贴指针，
-    // 由 rAF 弹簧跟随逐帧追赶（抹平高频抖动，与浏览器同构）
-    this.dragTarget = { x: d.petX + dx, y: d.petY + dy };
+    // 由 rAF 弹簧跟随逐帧追赶（抹平高频抖动，与浏览器同构）。
+    // 收紧档再夹一次（grabClamp）：窗口贴着宠物、又不会为拖拽撑开，目标必须夹在窗口内，
+    // 否则宠物一超前指针就出窗 → 收不到后续 pointermove/pointerup（见 grabClamp 的方法注释）。
+    const t = this.grabClamp(d.petX + dx, d.petY + dy);
+    this.dragTarget = { x: t.x, y: t.y };
     this.startDragFollow();
   }
 
@@ -1501,9 +1510,51 @@ class PetSprite {
    */
   marginMode() {
     if (this.menuOpen || this.chatOpen || this.balanceClickable()) return 'expand';
-    if (this.dragState && this.dragState.active) return 'expand';
+    // 拖拽**不**改余量（原实现按 dragState.dragging 撑整圈，已删）：撑开时窗口在拖起来的那一帧
+    // 突然放大 2×0.5×size，而窗口尺寸与 sprite 偏移不是同一帧生效——在 niri 这类"尺寸变更下一帧
+    // 才提交"的合成器上，宠物会先按新尺寸被摆一次、再按新偏移摆回来，用户看到的就是「一拖就瞬移」。
+    // 代价：拖拽时窗贴边，指针一旦滑出窗口就收不到 pointermove/pointerup（原生 Wayland 特有的老问题）。
+    // 用 grabClamp 补：把弹簧目标夹在窗口内（见 grabClamp），宠物始终朝指针追、指针始终在窗口里。
+    // 点击积分卡片是挂到 body 的固定定位浮层，仍需整圈空间。
     if (document.querySelector('.dsh-pet-score')) return 'expand';
     return this.bubbleShown ? 'bubble' : 'base';
+  }
+
+  /**
+   * 收紧档拖拽用的"抓取夹取"：把弹簧目标（宠物包围盒左上角，屏幕坐标）限制在窗口能装下的范围。
+   *
+   * 为什么需要：收紧档下窗口贴着宠物（余量只有 MIN_TIGHT_PAD_PX），宠物由弹簧追光标、**滞后**于
+   * 指针——指针往前多走一点就越过窗口边界，窗口就收不到后续 pointermove/pointerup（宠物定格、
+   * 松手丢失）。原实现靠"拖拽时把窗口撑回宽档"绕开，但那会让窗口尺寸在拖起来的那一帧突变；
+   * 在 niri 这类"尺寸变更下一帧才提交"的合成器上，宠物会先按新尺寸被摆一次、再按新偏移摆回来
+   * ——用户看到的就是「一拖就瞬移」。
+   *
+   * 现在窗口不动，改夹**目标**：指针屏幕坐标换算成"宠物左上角"，再夹进
+   * [窗口左 + 抓取内缩, 窗口右 − 宠物宽 − 抓取内缩]（纵向同理）。宠物始终朝指针方向追，
+   * 指针始终留在窗口里，拖拽全程窗口尺寸恒定。宽档不夹（余量本来就够，行为逐位不变）。
+   *
+   * @param {number} targetX 想让宠物左上角去的屏幕 X（= 按下时宠物位置 + 指针增量）
+   * @param {number} targetY 同上，Y
+   * @returns {{x:number, y:number}} 夹取后的目标（本窗口坐标系，与 dragTarget / this.pos 同口径）
+   */
+  grabClamp(targetX, targetY) {
+    if (!TIGHT_WINDOW) return { x: targetX, y: targetY };
+    const inset = this.GRAB_INSET;
+    // 窗口可见左/上（屏幕坐标）；窗口原点 = 宠物位置 − margin，见 sendBounds
+    const winLeft = this.pos.x - this.margin.l + VIEW.x;
+    const winTop = this.pos.y - this.margin.t + VIEW.y;
+    const winW = this.size + this.margin.l + this.margin.r;
+    const winH = this.winH + this.margin.t + this.margin.b;
+    // 目标换算成屏幕坐标再夹，最后换回本窗口坐标系
+    const sx = targetX + VIEW.x;
+    const sy = targetY + VIEW.y;
+    const minX = winLeft + inset;
+    const maxX = winLeft + winW - this.size - inset;
+    const minY = winTop + inset;
+    const maxY = winTop + winH - this.winH - inset;
+    // max < min 的退化情形（宠物比窗口还大）取中点，避免 NaN/反跳
+    const clamp = (v, lo, hi) => (hi < lo ? (lo + hi) / 2 : Math.min(Math.max(v, lo), hi));
+    return { x: clamp(sx, minX, maxX) - VIEW.x, y: clamp(sy, minY, maxY) - VIEW.y };
   }
 
   /**
@@ -1535,20 +1586,56 @@ class PetSprite {
     // 所以需要的上边距 = 气泡高度 − 这一段。
     const need = mode === 'bubble' ? this.bubbleTopOverflow() : this.bubbleTopMargin;
     const next = S.windowMargins(this.size, need, true, mode);
+    // 【收紧档：只向右下长】共享口径算出来的是"四边均分"的余量（l=t=r=b），但**左边距与上边距必须
+    // 恒为最小内边距**，多出来的空间全部加到右/下。原因（实测，niri）：
+    //   窗口从 486×306 撑到 924×744 时，合成器保持窗口的**左上角**不变、向右下生长；
+    //   而渲染端若把 sprite 钉在 (margin.l, margin.t)=231,231，宠物像素就会跟着向右下挪 219px。
+    //   用户看到的正是「右键菜单一开、宠物瞬移到原位置右下方」。
+    // 左边距/上边距钉死 → sprite 偏移恒定 → 窗口怎么长，宠物屏幕像素都不动；
+    // 同时菜单/气泡也不会往屏幕左上伸出窗口（窗口左上角不动 = 永远不会越出原点那一侧）。
+    // 气泡档例外：气泡悬在**头顶**，上边距必须撑开，否则气泡被窗口上边缘裁掉（那条路径本来就在上方）。
+    if (mode !== 'bubble') {
+      const pad = S.MIN_TIGHT_PAD_PX;
+      next.r += next.l - pad;
+      next.b += next.t - pad;
+      next.l = pad;
+      next.t = pad;
+    }
     if (next.l === prev.l && next.t === prev.t && next.r === prev.r && next.b === prev.b) {
       this._marginMode = mode;
       return;
     }
     this._marginMode = mode;
     this.margin = next;
+    this.marginResizeAt = performance.now(); // 主动改窗口尺寸的时间戳（见 isOwnMarginResize）
     window.__dshPetDebug.winMargin = next;
-    // sprite 钉在窗口内 (margin.l, margin.t)：窗口变了，sprite 自己的偏移也要跟着改，
-    // 然后重报一次 bounds（宠物包围盒位置不变，只是窗口把它重新包了一圈）
+    // sprite 钉在窗口内 (margin.l, margin.t)：收紧档下这两个值恒为内边距，所以宠物在窗口内不会移动，
+    // 窗口只会往右下长大（见上面的注释）；宽档不经过本函数，行为不变。
     this.el.style.left = next.l + 'px';
     this.el.style.top = next.t + 'px';
     // 只重发窗口包围盒，**不**调 position()：position() 是按「配置角落 + 边距」重算位置，
     // 宠物正漫游/被拖到屏幕中间时会把窗口（连同宠物）瞬移回角落。余量变化不该挪宠物。
     this.sendBounds(this.pos.x, this.pos.y);
+  }
+
+  /**
+   * 本次窗口 resize 是不是**我们自己改余量**引起的。
+   *
+   * updateMargin 改档位时把 sprite 偏移（margin.l/t）与窗口包围盒一起改，宠物在屏幕上的位置不变；
+   * 但窗口尺寸变了就会触发 renderer 的 resize 兜底（那里调 position() 重规整）。不设防的话，
+   * 每次档位变化（按下/松手/气泡出现/菜单开关）都会把宠物重新按**配置角落或上次落点**摆一遍——
+   * 用户看到的就是「点一下桌宠，它瞬移回角落」。
+   *
+   * 判据（两道，宁松勿误伤）：
+   *   ① 内容区尺寸 = 宠物包围盒 + 当前余量（±2px 覆盖物理↔CSS 取整）→ 这就是自己改出来的尺寸；
+   *   ② 余量刚改完的 300ms 内一律算自己人——系统可能把窗口尺寸夹过（夹取/舍入较大），
+   *      尺寸对不上也不该据此把宠物拽走。过期自动失效，不会吃掉真正的 DPI 变更（那条是拖拽中到达的）。
+   */
+  isOwnMarginResize() {
+    const w = Math.round(this.size + this.margin.l + this.margin.r);
+    const h = Math.round(this.winH + this.margin.t + this.margin.b);
+    if (Math.abs(window.innerWidth - w) <= 2 && Math.abs(window.innerHeight - h) <= 2) return true;
+    return performance.now() - this.marginResizeAt < 300;
   }
 
   setInteractive(flag) {
@@ -1639,10 +1726,15 @@ class PetSprite {
     const px = wx - this.margin.l;
     const py = wy - this.margin.t;
     const inBody = px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h;
+    // 【收紧档：整窗可点】窗口已经贴到宠物身上（余量只有 MIN_TIGHT_PAD_PX），此时"只有身体可点"会把贴边的控件
+    // 判成不可点——用户报的"复制按钮在同样的位置 web 版点得到、桌面版点不到"就是它：那个按钮
+    // 长在身体命中区之外、却仍在窗口之内。收紧档下窗口内一律算可交互；宽档不变（那里有余量，
+    // 整窗可点会挡下层应用）。主进程侧同口径见 pointer-target.js 的 wholeWindow。
+    const inWindow = !TIGHT_WINDOW;
     // 光标位置存**视口坐标**（窗口原点 + 窗口内坐标）：窗口随宠物移动时贴光标不会漂，见 renderTip。
     // 必须在 setTip 之前更新：setTip 变显隐时会立刻渲染一次，晚一步就会用上一次的光标摆位。
     if (inBody) this.tipCursor = { x: this.pos.x - this.margin.l + wx, y: this.pos.y - this.margin.t + wy };
-    this.setInteractive(inBody);
+    this.setInteractive(inBody || inWindow);
     // 悬浮提示与可交互判定同源（同一个 inBody）：光标进身体 → 提示出现，离开 → 收起
     this.setTip(inBody);
     // 跟随光标：位置依赖光标，所以每次移动都得重摆一次（setTip 只在显隐变化时才渲染）
