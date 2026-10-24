@@ -1639,7 +1639,10 @@ class PetSprite {
   }
 
   setInteractive(flag) {
-    const next = !!flag;
+    // 收纳窗：整窗常驻可交互（主进程侧也永不放行穿透，见 main.js 的 setWindowIgnore）。
+    // 这里钉死为 true，只为了让窗口状态镜像保持真实——渲染端与主进程两份状态必须一致，
+    // 否则冒烟断言/排障读到的值会对不上。
+    const next = STICKY_WINDOW ? true : !!flag;
     if (next === this._interactive) return; // 只在状态变化时发 IPC，避免逐帧刷屏
     this._interactive = next;
     window.__dshPetDebug.interactive = next;

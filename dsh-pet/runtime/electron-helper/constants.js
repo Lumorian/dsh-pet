@@ -162,6 +162,8 @@ const STATE_WAIT_MS = 1000;
 // shared 的 window.ts（宽档 0.5×size，收紧档 MIN_TIGHT_PAD_PX），本文件只决定**用哪一档**：
 // 主进程判定本会话没有整窗点击穿透能力（原生 Wayland）时经 query 传 tight=1 下来。
 const TIGHT_WINDOW = params.get('tight') === '1';
+/** 收纳窗（主进程 STICKY_WINDOW 经 query 注入）：窗口永不穿透，整窗始终可交互，见 sprite 的 setInteractive */
+const STICKY_WINDOW = params.get('sticky') === '1';
 
 // ---------- 全局状态 ----------
 const rootEl = document.getElementById('root');

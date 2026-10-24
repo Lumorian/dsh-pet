@@ -406,6 +406,32 @@ describe('守卫：窗口余量口径（收紧档 = 原生 Wayland 的"点击穿
     assert.deepEqual(helperMargins(462, 195, true, 'expand'), helperMargins(462, 195, false, 'base'));
   });
 
+  test('收纳窗（sticky）：收紧档默认开、宽档默认关，环境变量可覆盖，且永不穿透', () => {
+    const { resolveStickyWindow } = require(helper + 'window-margin.js');
+    assert.equal(resolveStickyWindow({ tight: true, env: {} }), true, '收紧档默认开（窗口贴着宠物，可点区就是本体）');
+    assert.equal(resolveStickyWindow({ tight: false, env: {} }), false, '宽档默认关（有余量，常驻可点会挡下层应用）');
+    assert.equal(resolveStickyWindow({ tight: false, env: { DSH_PET_STICKY: '1' } }), true, '可显式打开');
+    assert.equal(resolveStickyWindow({ tight: true, env: { DSH_PET_STICKY: '0' } }), false, '可显式关掉（排障逃生口）');
+    assert.equal(resolveStickyWindow({ tight: true, env: { DSH_PET_STICKY: ' ' } }), true, '空白值按未设置处理');
+    const main = readSource(helper + 'main.js');
+    // 唯一出口守卫：这正是"不用按 Super 也能拖"的机制——窗口必须常驻接收鼠标
+    assert.ok(
+      /const want = isStickyWindow\(\) \? false : ignore;/.test(main),
+      '收纳窗必须在 setWindowIgnore（唯一出口）里被钉成不穿透，否则合成器先把点击吃掉、渲染端收不到 pointerdown',
+    );
+    assert.ok(/sticky: isStickyWindow\(\) \? '1' : '0',/.test(main), '收纳窗标记必须经 query 传给渲染端');
+    const sprite = readSource(helper + 'sprite.js');
+    assert.ok(
+      /const next = STICKY_WINDOW \? true : !!flag;/.test(sprite),
+      '渲染端的可交互镜像必须与主进程一致（收纳窗恒为 true）',
+    );
+    const constants = readSource(helper + 'constants.js');
+    assert.ok(
+      /const STICKY_WINDOW = params\.get\('sticky'\) === '1';/.test(constants),
+      '渲染端必须从 query 读收纳窗标记',
+    );
+  });
+
   test('needsTightWindow：只把「明确的原生 Wayland」判为收紧，其余一律保持旧行为', () => {
     const wl = { platform: 'linux', env: { WAYLAND_DISPLAY: 'wayland-1' } };
     assert.equal(needsTightWindow(wl), true, '原生 Wayland 必须收紧（E43 的 setIgnoreMouseEvents 在那里是空操作）');

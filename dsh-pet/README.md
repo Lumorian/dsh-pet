@@ -89,6 +89,10 @@ macOS 的 Safari/WKWebView 不认 webm 的 alpha 通道（会渲染黑底），�
 - **独立透明置顶窗口**：为**每只桌面宠物**各开一个**局部小窗口**（尺寸 = 宠物包围盒 + 四周外扩余量，为气泡/弹窗预留空间；透明、置顶、跳过任务栏），窗口跟随宠物移动；窗口**永不铺满屏幕**（全屏透明置顶窗会触发 Windows DWM 视频合成黑屏：需「透明置顶 + 非点击穿透 + 可聚焦且已聚焦 + 完整盖住视频窗」四项齐备，与窗口尺寸无关，详见 `runtime/electron-helper/main.js` 文件头注释；桌宠悬停时会翻成可交互、`show()` 也会聚焦，故全屏画布形态仍不做）。与浏览器一致，只有宠物**身体命中区**可交互，窗口内其余透明像素与窗口外一律**点击穿透**到下层应用（`setIgnoreMouseEvents` + 悬停命中翻转）
   - **原生 Wayland 特例（收紧档）**：Electron 43 的 `setIgnoreMouseEvents` 在 Linux 只有 X11 分支（Wayland 下静默空操作），`screen.getCursorScreenPoint()` 在 Wayland 下也不可用——这类会话里整窗穿透与光标兜底**同时失效**，924×744 的窗口会整块吞掉鼠标（表现为「窗口矩形内到处都算点在桌宠上」）。因此按会话自动切到收紧档：窗口收到「宠物本体 + 12px」，只有气泡显示时加上边、右键菜单/对话/积分卡片/拖拽时整圈撑回原尺寸（口径在 `src/shared/window.ts`，主进程侧镜像在 `runtime/electron-helper/window-margin.js`）。Windows / macOS / X11 不受影响，余量仍是 `0.5×size`。
   - 排障开关：`DSH_PET_TIGHT_WINDOW=0` 强制关（回到旧行为）、`=1` 强制开（在其它平台验证收紧档外观）
+  - **收纳窗（不用按 Super 也能拖动宠物）**：niri 等合成器把「拖动窗口」绑在 **Super+左键**上，而桌宠是 `frame:false` 的透明窗、没有标题栏可抓。更关键的是：窗口默认**整窗点击穿透**（`setIgnoreMouseEvents(true)`），点击会先被合成器当成"点桌面"吃掉，渲染端根本收不到 `pointerdown`，所以不按 Super 永远拖不动。收纳窗就是把窗口钉成**永不穿透**（整窗常驻接收鼠标），拖拽逻辑便与浏览器里一样直接生效。
+    - 判定口径（`runtime/electron-helper/window-margin.js` 的 `resolveStickyWindow`，纯函数、带单测）：收紧档（窗口已贴着宠物）**默认开**；宽档**默认关**（那里有余量，常驻可点会整块挡住下层应用）。
+    - 开关：`DSH_PET_STICKY=0` 强制关、`=1` 强制开（排障与一次性覆盖）。启动日志会打 `sticky-window=true/false`，排查时先看这一行。
+    - 代价：开着时宠物周围那圈透明余量也会挡住下层应用——收紧档下只有 2px（基本无感），宽档下是半只宠物宽的一圈。
   - **合成器自绘的窗口边框（niri 等 wlroots 合成器）**：桌宠窗口是**透明小窗**，但 niri 会给**每个 toplevel 的窗口矩形**画一圈 focus ring（默认 4px、`#7fc8ff`）——窗口一拿到焦点（点/拖宠物、点对话输入框）就会多出一个**矩形边框**套在宠物外面，看着像给桌宠加了框；浏览器内的宠物是页面里的 overlay，没有这层窗口装饰，所以两边观感不同。另外全局 `geometry-corner-radius` + `clip-to-geometry` 还会把宠物四角裁掉。这两件事**只能在合成器侧关**（Electron 拿不到「别画窗口环」的协议），加一条 window-rule 即可，一次性：
     ```kdl
     // ~/.config/niri/config.kdl

@@ -43,6 +43,24 @@ function needsTightWindow(o = {}) {
 }
 
 /**
+ * 本会话是否使用「收纳窗」（窗口永不点击穿透，见 main.js 的 STICKY_WINDOW）。
+ *
+ * 三层优先级：环境变量 DSH_PET_STICKY（'0'/'1'）> 默认值。默认值由调用方按档位给：
+ * 收紧档 true（窗口贴着宠物，可点区就是宠物本体）、宽档 false（有余量，常驻可点会挡下层应用）。
+ * 纯函数：不读 Electron，可被 node:test 直接覆盖。
+ *
+ * @param {{env?: Record<string,string|undefined>, tight?: boolean}} [o]
+ * @returns {boolean}
+ */
+function resolveStickyWindow(o = {}) {
+  const env = o.env || process.env || {};
+  const raw = String(env.DSH_PET_STICKY ?? '').trim();
+  if (raw === '0' || raw === 'false' || raw === 'off') return false;
+  if (raw === '1' || raw === 'true' || raw === 'on') return true;
+  return o.tight === true;
+}
+
+/**
  * 窗口余量（与 src/shared/window.ts 的 windowMargins 同一份算法）。
  *
  * @param {number} size 宠物包围盒宽度
@@ -61,4 +79,4 @@ function windowMargins(size, bubbleTop, tight, mode) {
   return { t: pad, r: pad, b: pad, l: pad };
 }
 
-module.exports = { MIN_TIGHT_PAD_PX, needsTightWindow, windowMargins };
+module.exports = { MIN_TIGHT_PAD_PX, needsTightWindow, resolveStickyWindow, windowMargins };

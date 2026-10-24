@@ -68,7 +68,7 @@ const { shouldLinearize, resolveForcedScale, resolvePetScale } = require('./dpi-
 const { trayPlatform } = require('./tray-platform.js');
 const { buildDeskGeometry } = require('./desktop-geometry.js');
 // 窗口余量的纯计算（原生 Wayland 下没有点击穿透能力，必须把窗口收紧到宠物身上；见该文件头）
-const { MIN_TIGHT_PAD_PX, needsTightWindow, windowMargins } = require('./window-margin.js');
+const { MIN_TIGHT_PAD_PX, needsTightWindow, resolveStickyWindow, windowMargins } = require('./window-margin.js');
 
 // 允许无用户手势直接播放（余额动画等）
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required');
@@ -330,6 +330,37 @@ function updatePetState(petId, partial) {
 }
 
 /**
+ * 收纳窗：窗口**永不点击穿透**（整窗常驻接收鼠标），从而不依赖合成器的「按 Super+左键拖动窗口」
+ * 就能自定义拖动宠物。
+ *
+ * 为什么需要它：niri 等合成器把「拖动一个窗口」绑在 Super+左键上；宠物窗口是 frame:false 的
+ * 透明窗，没有标题栏可抓，用户只能按住 Super 拖——而我们的拖拽逻辑又要求"窗口收到鼠标事件"。
+ * 若窗口默认穿透（setIgnoreMouseEvents(true)），点击先被合成器当成"点桌面"拿走，渲染端根本
+ * 收不到 pointerdown，再怎么改渲染端都拖不动。
+ *
+ * 开关分三层（优先级从高到低）：
+ *   · 环境变量 `DSH_PET_STICKY=0/1` —— 排障与一次性覆盖；
+ *   · 宠物配置 `pets[].sticky`（设置页「收纳窗」勾选框）—— 用户级开关，宿主经 DSH_PET_STICKY 透传；
+ *   · 默认：**收紧档（窗口已贴着宠物，可点区就是宠物本体）默认开**，宽档默认关。
+ *     宽档下窗口四周有半只宠物的透明余量，整窗常驻接收鼠标会整块挡住下层应用（那正是收紧档当初
+ *     要解决的问题），所以宽档不默认开、只能显式打开。
+ *
+ * 代价（写明，不藏）：开着的时候宠物周围那圈透明余量也会挡住下层应用——收紧档下只有
+ * MIN_TIGHT_PAD_PX（2px），基本可以忽略；宽档下就是半只宠物宽的一圈，开之前请自己权衡。
+ */
+// 注意：本块位于 TIGHT_WINDOW 之前（setWindowIgnore 是它的第一个使用者），所以这里**不能**立即求值，
+// 否则会踩 TDZ（Cannot access 'TIGHT_WINDOW' before initialization）。改为惰性求值，首次用到时才计算；
+// 依赖 TIGHT_WINDOW 的时机都在 app ready 之后（建窗 / 翻转穿透），那时它早已初始化。
+let stickyCache = null;
+function isStickyWindow() {
+  if (stickyCache === null) {
+    stickyCache = resolveStickyWindow({ tight: TIGHT_WINDOW });
+    console.log('[dsh-pet-desktop-helper] sticky-window=' + stickyCache);
+  }
+  return stickyCache;
+}
+
+/**
  * 每窗口当前穿透状态（true = 整窗点击穿透）。所有 setIgnoreMouseEvents 只经本文件
  * （创建时初始化 + pet:set-interactive 翻转 + 光标兜底轮询），这里镜像真实状态，供冒烟断言/排查使用
  * （Electron 无 isIgnoringMouseEvents 取值 API）。
@@ -338,8 +369,11 @@ const windowIgnore = new Map();
 
 /** 翻转整窗穿透的**唯一出口**：状态与 windowIgnore 镜像永远一起更新（穿透期间保留 forward） */
 function setWindowIgnore(win, ignore) {
-  win.setIgnoreMouseEvents(ignore, { forward: true });
-  windowIgnore.set(win.id, ignore);
+  // 收纳窗（STICKY_WINDOW）：永不穿透——窗口必须常驻接收鼠标，用户才不用按 Super 让合成器来拖窗口。
+  // 这里是**唯一出口**，所以一条守卫就覆盖了创建时的初值、渲染端翻转与光标兜底轮询三条通道。
+  const want = isStickyWindow() ? false : ignore;
+  win.setIgnoreMouseEvents(want, { forward: true });
+  windowIgnore.set(win.id, want);
 }
 
 /** 兜底通道的光标轮询间隔（ms，与 issue #55 报告者实测值一致） */
@@ -574,6 +608,8 @@ function createPetWindows() {
           scale: String(scale),
           // 收紧窗口（原生 Wayland）：renderer 按同一口径算余量，窗口与宠物身体严丝合缝
           tight: TIGHT_WINDOW ? '1' : '0',
+          // 收纳窗：窗口永不穿透（整窗常驻可交互），见 STICKY_WINDOW 的注释
+          sticky: isStickyWindow() ? '1' : '0',
           petIndex: String(pet.index),
           workAreaW: String(area.width),
           workAreaH: String(area.height),
